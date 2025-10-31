@@ -98,10 +98,13 @@ def main():
         cycle_position = (step // 10) % 2
         alpha = 0.2 if cycle_position == 0 else 0.8
         
-        # Randomly select two vectors from memory
+        # Randomly select two different vectors from memory
         n_memory = memory.shape[0]
         idx_i = torch.randint(0, n_memory, (1,)).item()
         idx_j = torch.randint(0, n_memory, (1,)).item()
+        # Ensure we select different vectors
+        while idx_j == idx_i and n_memory > 1:
+            idx_j = torch.randint(0, n_memory, (1,)).item()
         x_i = memory[idx_i]
         x_j = memory[idx_j]
         
