@@ -1,0 +1,2 @@
+# creativity-sim
+Creativity simulator.
