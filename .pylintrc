@@ -1,0 +1,12 @@
+[MASTER]
+ignore-patterns=^\.#
+
+[MESSAGES CONTROL]
+disable=
+    C0114,  # missing-module-docstring (already documented in README/headers)
+    C0116,  # missing-function-docstring (we use them but don't enforce everywhere)
+
+[FORMAT]
+max-line-length=100
+indent-string='    '
+
