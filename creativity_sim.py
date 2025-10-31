@@ -63,11 +63,11 @@ def compute_coherence(vector, x_i, x_j):
     # Cosine similarity with first input
     cos_sim_i = torch.nn.functional.cosine_similarity(
         vector.unsqueeze(0), x_i.unsqueeze(0)
-    )
+    )[0]
     # Cosine similarity with second input
     cos_sim_j = torch.nn.functional.cosine_similarity(
         vector.unsqueeze(0), x_j.unsqueeze(0)
-    )
+    )[0]
     # Coherence is the average similarity (how related to inputs)
     coherence = (cos_sim_i + cos_sim_j) / 2.0
     return coherence
