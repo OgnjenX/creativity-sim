@@ -13,26 +13,25 @@ resulting combinations. It includes:
 - Enhanced plotting of novelty, coherence, creativity (and optional memory size)
 """
 
-from collections import deque
 import math
+from collections import deque
 from typing import Tuple, Optional
 
-import torch
 import matplotlib.pyplot as plt
+import torch
 
 
 def reorganize(x_i: torch.Tensor, x_j: torch.Tensor, alpha: float, noise: torch.Tensor) -> torch.Tensor:
-    """
-    Combine two input vectors with weighted averaging and scaled noise.
-    
+    """Combine two input vectors with weighted averaging and scaled noise.
+
     Args:
-        x_i: First input vector (tensor)
-        x_j: Second input vector (tensor)
-        alpha: Weighting factor for combination (float in [0, 1])
-        noise: Random noise vector (tensor)
-    
+        x_i: First input vector.
+        x_j: Second input vector.
+        alpha: Weighting factor for combination in [0, 1]; higher values favor x_i.
+        noise: Random noise vector for exploration.
+
     Returns:
-        Combined vector with noise scaled by (1 - alpha)
+        Combined vector with noise scaled by (1 - alpha).
     """
     combined = alpha * x_i + (1 - alpha) * x_j
     result = combined + (1 - alpha) * noise
@@ -40,8 +39,14 @@ def reorganize(x_i: torch.Tensor, x_j: torch.Tensor, alpha: float, noise: torch.
 
 
 def compute_novelty(vector: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
-    """
-    Compute novelty as the minimum Euclidean distance to all vectors in memory.
+    """Compute novelty as the minimum Euclidean distance to all vectors in memory.
+
+    Args:
+        vector: Query vector to evaluate.
+        memory: Collection of memory vectors.
+
+    Returns:
+        Minimum Euclidean distance to memory; infinity if memory is empty.
     """
     if memory.numel() == 0:
         # Return infinity to indicate maximal novelty when memory is empty
@@ -51,9 +56,15 @@ def compute_novelty(vector: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
 
 
 def compute_coherence(vector: torch.Tensor, x_i: torch.Tensor, x_j: torch.Tensor) -> torch.Tensor:
-    """
-    Compute coherence as the average cosine similarity to input vectors,
-    clipped to [0, 1].
+    """Compute coherence as the average cosine similarity to input vectors, clipped to [0, 1].
+
+    Args:
+        vector: Output vector to evaluate.
+        x_i: First input vector.
+        x_j: Second input vector.
+
+    Returns:
+        Average cosine similarity to inputs, clipped to [0, 1].
     """
     cos_sim_i = torch.nn.functional.cosine_similarity(vector.unsqueeze(0), x_i.unsqueeze(0))[0]
     cos_sim_j = torch.nn.functional.cosine_similarity(vector.unsqueeze(0), x_j.unsqueeze(0))[0]
@@ -69,17 +80,26 @@ class AlphaController:
     Modes:
         - 'cosine': smooth periodic variation between [alpha_min, alpha_max]
         - 'adaptive': adjusts alpha based on recent change in EMA of creativity
+
+    Args:
+        mode: Control mode ('cosine' or 'adaptive').
+        alpha_min: Minimum allowed alpha value (exploration-heavy).
+        alpha_max: Maximum allowed alpha value (exploitation-heavy).
+        period: Period of cosine cycle in steps (used only in 'cosine' mode).
+        ema_beta: EMA smoothing factor for creativity tracking (used only in 'adaptive' mode).
+        adapt_step_up: Step size to increase alpha when creativity improves.
+        adapt_step_down: Step size to decrease alpha when creativity declines.
     """
 
     def __init__(
-        self,
-        mode: str = "cosine",
-        alpha_min: float = 0.2,
-        alpha_max: float = 0.8,
-        period: int = 50,
-        ema_beta: float = 0.9,
-        adapt_step_up: float = 0.02,
-        adapt_step_down: float = 0.04,
+            self,
+            mode: str = "cosine",
+            alpha_min: float = 0.2,
+            alpha_max: float = 0.8,
+            period: int = 50,
+            ema_beta: float = 0.9,
+            adapt_step_up: float = 0.02,
+            adapt_step_down: float = 0.04,
     ) -> None:
         self.mode = mode
         self.alpha_min = alpha_min
@@ -94,9 +114,19 @@ class AlphaController:
 
     @property
     def alpha(self) -> float:
+        """Current alpha value."""
         return float(self._alpha)
 
     def update(self, step: int, creativity: float) -> float:
+        """Update alpha based on the current mode and observed creativity.
+
+        Args:
+            step: Current simulation step.
+            creativity: Latest creativity score.
+
+        Returns:
+            Updated alpha value.
+        """
         if self.mode == "cosine":
             phase = 2 * math.pi * (step % self.period) / self.period
             self._alpha = self.alpha_min + 0.5 * (1 - math.cos(phase)) * (self.alpha_max - self.alpha_min)
@@ -121,7 +151,13 @@ class AlphaController:
 
 
 class MemoryBuffers:
-    """Manages live and replay memories with fixed capacities and biased sampling."""
+    """Manages live and replay memories with fixed capacities and biased sampling.
+
+    Args:
+        dim: Dimensionality of stored vectors.
+        live_capacity: Maximum number of vectors in the live buffer.
+        replay_capacity: Maximum number of vectors in the replay buffer.
+    """
 
     def __init__(self, dim: int, live_capacity: int = 256, replay_capacity: int = 2048):
         self.dim = dim
@@ -129,11 +165,21 @@ class MemoryBuffers:
         self.replay = deque(maxlen=replay_capacity)
 
     def initialize(self, n_initial: int) -> None:
+        """Populate the live buffer with random vectors.
+
+        Args:
+            n_initial: Number of initial vectors to generate.
+        """
         init = torch.randn(n_initial, self.dim)
         for v in init:
             self.add(v)
 
     def add(self, vector: torch.Tensor) -> None:
+        """Add a vector to the live buffer, moving the oldest to replay if at capacity.
+
+        Args:
+            vector: Vector to add.
+        """
         # If live is at capacity, capture the oldest element before it is dropped by the next append; push that to replay
         if len(self.live) == self.live.maxlen:
             oldest = self.live[0]
@@ -142,23 +188,33 @@ class MemoryBuffers:
         self.live.append(vector.detach())
 
     def full_memory(self) -> torch.Tensor:
+        """Return a tensor containing all vectors from both buffers."""
         if len(self.live) == 0 and len(self.replay) == 0:
             return torch.empty(0, self.dim)
         all_vecs = list(self.replay) + list(self.live)
         return torch.stack(all_vecs, dim=0)
 
     def sizes(self) -> Tuple[int, int, int]:
+        """Return sizes of live, replay, and total memory."""
         return len(self.live), len(self.replay), len(self.live) + len(self.replay)
 
     @staticmethod
     def _draw_from(buf: deque) -> int:
-        # Return index into buffer
+        """Return a random index into the given deque."""
         return int(torch.randint(0, len(buf), (1,)).item())
 
     @staticmethod
     def _draw_distinct(buf: deque, avoid_idx: int, fallback_buf: Optional[deque] = None) -> torch.Tensor:
         """Draw a vector from buf with an index different from avoid_idx.
         If buf has size 1 and fallback_buf is provided, draw from fallback_buf.
+
+        Args:
+            buf: Primary buffer to draw from.
+            avoid_idx: Index to avoid when drawing.
+            fallback_buf: Optional secondary buffer to use if buf cannot provide a distinct vector.
+
+        Returns:
+            A vector distinct from the one at avoid_idx.
         """
         if len(buf) >= 2:
             # Efficiently sample a distinct index
@@ -178,6 +234,13 @@ class MemoryBuffers:
         Strategy: compute preference p toward replay when alpha <= threshold.
         Draw first sample accordingly; for second, try to draw from the same buffer
         while ensuring distinctness; fallback to the other buffer if needed.
+
+        Args:
+            alpha: Current alpha value controlling exploration vs exploitation.
+            alpha_replay_thresh: Threshold below which replay sampling is preferred.
+
+        Returns:
+            A tuple of two distinct vectors.
         """
         total_mem = self.sizes()[2]
         assert total_mem >= 2, f"Not enough memory to sample two distinct vectors (current size: {total_mem}, required: 2)"
