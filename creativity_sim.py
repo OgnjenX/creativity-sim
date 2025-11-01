@@ -91,11 +91,7 @@ def _avg_pairwise_distance(tensor: torch.Tensor) -> torch.Tensor:
         return torch.tensor(0.0, dtype=tensor.dtype)
     dists = torch.cdist(tensor, tensor)
     nonzero = dists[dists > 0]
-    return (
-        torch.mean(nonzero)
-        if nonzero.numel() > 0
-        else torch.tensor(0.0, dtype=tensor.dtype)
-    )
+    return torch.mean(nonzero) if nonzero.numel() > 0 else torch.tensor(0.0, dtype=tensor.dtype)
 
 
 def _knn_distance(
@@ -196,9 +192,7 @@ def compute_novelty(
     return min_distance
 
 
-def compute_coherence(
-    vector: torch.Tensor, x_i: torch.Tensor, x_j: torch.Tensor
-) -> torch.Tensor:
+def compute_coherence(vector: torch.Tensor, x_i: torch.Tensor, x_j: torch.Tensor) -> torch.Tensor:
     """Compute coherence as the average cosine similarity to input vectors, clipped to [0, 1].
 
     Args:
@@ -412,9 +406,7 @@ class MemoryBuffers:
             # No memory yet, fall back to simple add
             return self._add_simple(v)
         # Normalize distances by average pairwise distance for stability
-        _, _ = _knn_distance(
-            v, mem, k=self.knn_k, normalize=True
-        )
+        _, _ = _knn_distance(v, mem, k=self.knn_k, normalize=True)
         min_dist = torch.min(torch.norm(mem - v.unsqueeze(0), dim=1))
         # Similarity threshold applied on normalized scale if possible
         is_too_similar = bool(min_dist.item() < self.similarity_threshold)
@@ -469,11 +461,13 @@ class MemoryBuffers:
             # Replay comes first in full_memory()
             if global_idx < self._replay_size:
                 self._replay_tensor[
-                    (self._replay_idx - self._replay_size + global_idx) % self.replay_capacity] = v
+                    (self._replay_idx - self._replay_size + global_idx) % self.replay_capacity
+                ] = v
             else:
                 live_pos = global_idx - self._replay_size
                 self._live_tensor[
-                    (self._live_idx - self._live_size + live_pos) % self.live_capacity] = v
+                    (self._live_idx - self._live_size + live_pos) % self.live_capacity
+                ] = v
         else:
             if global_idx < len(self.replay):
                 self.replay[global_idx] = v
@@ -495,7 +489,7 @@ class MemoryBuffers:
                 # Circular buffer: need to reorder
                 live_memory = torch.cat(
                     [
-                        self._live_tensor[self._live_idx:],
+                        self._live_tensor[self._live_idx :],
                         self._live_tensor[: self._live_idx],
                     ],
                     dim=0,
@@ -508,7 +502,7 @@ class MemoryBuffers:
                 # Circular buffer: need to reorder
                 replay_memory = torch.cat(
                     [
-                        self._replay_tensor[self._replay_idx:],
+                        self._replay_tensor[self._replay_idx :],
                         self._replay_tensor[: self._replay_idx],
                     ],
                     dim=0,
@@ -571,11 +565,7 @@ class MemoryBuffers:
             valid_indices = [i for i in range(size) if i != avoid_idx]
             j_idx = int(torch.randint(0, len(valid_indices), (1,)).item())
             return tensor[valid_indices[j_idx]]
-        if (
-            fallback_tensor is not None
-            and fallback_size is not None
-            and fallback_size > 0
-        ):
+        if fallback_tensor is not None and fallback_size is not None and fallback_size > 0:
             j_idx = MemoryBuffers._draw_from_tensor(fallback_tensor, fallback_size)
             return fallback_tensor[j_idx]
         else:
@@ -652,9 +642,7 @@ class MemoryBuffers:
             f"(current size: {total_mem}, required: 2)"
         )
 
-        have_replay = (
-            replay_size > 0 if self.use_tensor_memory else len(self.replay) > 0
-        )
+        have_replay = replay_size > 0 if self.use_tensor_memory else len(self.replay) > 0
         have_live = live_size > 0 if self.use_tensor_memory else len(self.live) > 0
 
         use_replay_first = self._should_use_replay_first(
@@ -675,9 +663,7 @@ class MemoryBuffers:
         return self._sample_pair_deque(use_replay_first, have_live, have_replay)
 
     @staticmethod
-    def _compute_replay_preference(
-        alpha: float, thresh: float, have_replay: bool
-    ) -> float:
+    def _compute_replay_preference(alpha: float, thresh: float, have_replay: bool) -> float:
         if thresh <= 0:
             raise ValueError(
                 "alpha_replay_thresh must be greater than zero"
@@ -975,9 +961,7 @@ def _plot_metrics(
     ax2.set_ylim(0, 1)
 
     memory_lines, memory_labels = ax.get_legend_handles_labels()
-    ax.legend(
-        memory_lines, memory_labels, loc="upper left", bbox_to_anchor=(0.02, 0.98)
-    )
+    ax.legend(memory_lines, memory_labels, loc="upper left", bbox_to_anchor=(0.02, 0.98))
 
     alpha_lines, alpha_labels = ax2.get_legend_handles_labels()
     ax2.legend(
@@ -1001,9 +985,7 @@ def _plot_metrics(
 
 def _validate_dimensions(dim):
     if dim < 2:
-        raise ValueError(
-            "Vector dimension must be at least 2 for meaningful creativity simulation"
-        )
+        raise ValueError("Vector dimension must be at least 2 for meaningful creativity simulation")
     if dim > 512:
         print(
             f"⚠️  High dimension ({dim}) detected. "
@@ -1015,9 +997,7 @@ def _warn_large_simulation(n_initial_memory, n_steps, use_tensor_memory, dim):
     if (n_initial_memory > 1000 or n_steps > 1000) and not use_tensor_memory:
         print("⚠️  Performance Warning: Large simulation detected.")
         print("   Consider setting use_tensor_memory=True for better performance.")
-        print(
-            "   This will use tensor-based memory management instead of deque operations."
-        )
+        print("   This will use tensor-based memory management instead of deque operations.")
     if dim > 512 and not use_tensor_memory:
         print("   Recommendation: Set use_tensor_memory=True for dimensions > 512")
 
@@ -1049,9 +1029,7 @@ def _setup_simulation_config():
     novelty_mode = "knn"  # "knn" or "min"
     knn_k = 5
     diversity_lambda = 0.2
-    deterministic_novelty_sampling = (
-        False  # For reproducible results in high-precision studies
-    )
+    deterministic_novelty_sampling = False  # For reproducible results in high-precision studies
     novelty_sampling_seed = 42  # Seed for deterministic novelty sampling
 
     # Diversity-preserving memory policy
@@ -1074,53 +1052,53 @@ def _setup_simulation_config():
     _warn_large_simulation(n_initial_memory, n_steps, use_tensor_memory, dim)
 
     return {
-        'dim': dim,
-        'n_initial_memory': n_initial_memory,
-        'n_steps': n_steps,
-        'live_capacity': live_capacity,
-        'replay_capacity': replay_capacity,
-        'use_tensor_memory': use_tensor_memory,
-        'alpha_mode': alpha_mode,
-        'alpha_min': alpha_min,
-        'alpha_max': alpha_max,
-        'cosine_period': cosine_period,
-        'alpha_replay_thresh': alpha_replay_thresh,
-        'noise_scale': noise_scale,
-        'novelty_mode': novelty_mode,
-        'knn_k': knn_k,
-        'diversity_lambda': diversity_lambda,
-        'deterministic_novelty_sampling': deterministic_novelty_sampling,
-        'novelty_sampling_seed': novelty_sampling_seed,
-        'memory_policy': memory_policy,
-        'similarity_threshold': similarity_threshold,
-        'far_pair_prob': far_pair_prob,
-        'creativity_pulse': creativity_pulse,
-        'pulse_window': pulse_window,
-        'pulse_drop_tol': pulse_drop_tol,
-        'pulse_steps': pulse_steps,
-        'pulse_noise_gain': pulse_noise_gain,
-        'pulse_alpha_drop': pulse_alpha_drop,
+        "dim": dim,
+        "n_initial_memory": n_initial_memory,
+        "n_steps": n_steps,
+        "live_capacity": live_capacity,
+        "replay_capacity": replay_capacity,
+        "use_tensor_memory": use_tensor_memory,
+        "alpha_mode": alpha_mode,
+        "alpha_min": alpha_min,
+        "alpha_max": alpha_max,
+        "cosine_period": cosine_period,
+        "alpha_replay_thresh": alpha_replay_thresh,
+        "noise_scale": noise_scale,
+        "novelty_mode": novelty_mode,
+        "knn_k": knn_k,
+        "diversity_lambda": diversity_lambda,
+        "deterministic_novelty_sampling": deterministic_novelty_sampling,
+        "novelty_sampling_seed": novelty_sampling_seed,
+        "memory_policy": memory_policy,
+        "similarity_threshold": similarity_threshold,
+        "far_pair_prob": far_pair_prob,
+        "creativity_pulse": creativity_pulse,
+        "pulse_window": pulse_window,
+        "pulse_drop_tol": pulse_drop_tol,
+        "pulse_steps": pulse_steps,
+        "pulse_noise_gain": pulse_noise_gain,
+        "pulse_alpha_drop": pulse_alpha_drop,
     }
 
 
 def _initialize_components(config):
     buffers = MemoryBuffers(
-        dim=config['dim'],
-        live_capacity=config['live_capacity'],
-        replay_capacity=config['replay_capacity'],
-        use_tensor_memory=config['use_tensor_memory'],
+        dim=config["dim"],
+        live_capacity=config["live_capacity"],
+        replay_capacity=config["replay_capacity"],
+        use_tensor_memory=config["use_tensor_memory"],
     )
-    buffers.initialize(config['n_initial_memory'], replay_fraction=0.3)
+    buffers.initialize(config["n_initial_memory"], replay_fraction=0.3)
     # Apply memory diversity settings
-    buffers.memory_policy = config['memory_policy']
-    buffers.similarity_threshold = config['similarity_threshold']
-    buffers.knn_k = config['knn_k']
+    buffers.memory_policy = config["memory_policy"]
+    buffers.similarity_threshold = config["similarity_threshold"]
+    buffers.knn_k = config["knn_k"]
 
     alpha_ctrl = AlphaController(
-        mode=config['alpha_mode'],
-        alpha_min=config['alpha_min'],
-        alpha_max=config['alpha_max'],
-        period=config['cosine_period'],
+        mode=config["alpha_mode"],
+        alpha_min=config["alpha_min"],
+        alpha_max=config["alpha_max"],
+        period=config["cosine_period"],
     )
 
     return buffers, alpha_ctrl
@@ -1128,22 +1106,23 @@ def _initialize_components(config):
 
 def _initialize_logs():
     logs = {
-        'novelty_log': [],
-        'diversity_log': [],
-        'coherence_log': [],
-        'creativity_log': [],
-        'alpha_log': [],
-        'mem_live_log': [],
-        'mem_replay_log': [],
-        'mem_total_log': [],
-        'pulse_markers': [],
-        'pulse_counter': 0
+        "novelty_log": [],
+        "diversity_log": [],
+        "coherence_log": [],
+        "creativity_log": [],
+        "alpha_log": [],
+        "mem_live_log": [],
+        "mem_replay_log": [],
+        "mem_total_log": [],
+        "pulse_markers": [],
+        "pulse_counter": 0,
     }
     return logs
 
 
-def _apply_pulse_modulation(curr_alpha, pulse_counter, alpha_min, pulse_alpha_drop,
-                            pulse_noise_gain):
+def _apply_pulse_modulation(
+    curr_alpha, pulse_counter, alpha_min, pulse_alpha_drop, pulse_noise_gain
+):
     alpha_effective = curr_alpha
     extra_noise = 0.0
     if pulse_counter > 0:
@@ -1158,11 +1137,11 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
     novelty = compute_novelty(
         output,
         memory_tensor,
-        mode=config['novelty_mode'],
-        k=config['knn_k'],
-        diversity_lambda=config['diversity_lambda'],
-        deterministic_sampling=config['deterministic_novelty_sampling'],
-        seed=config['novelty_sampling_seed'],
+        mode=config["novelty_mode"],
+        k=config["knn_k"],
+        diversity_lambda=config["diversity_lambda"],
+        deterministic_sampling=config["deterministic_novelty_sampling"],
+        seed=config["novelty_sampling_seed"],
     )
     coherence = compute_coherence(output, x_i, x_j)
     creativity = novelty * coherence
@@ -1173,26 +1152,27 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
     diversity = float(_avg_pairwise_distance(sample_for_div).item())
 
     # Log metrics
-    logs['novelty_log'].append(float(novelty.item()))
-    logs['diversity_log'].append(diversity)
-    logs['coherence_log'].append(float(coherence.item()))
-    logs['creativity_log'].append(float(creativity.item()))
-    logs['alpha_log'].append(alpha_effective)
+    logs["novelty_log"].append(float(novelty.item()))
+    logs["diversity_log"].append(diversity)
+    logs["coherence_log"].append(float(coherence.item()))
+    logs["creativity_log"].append(float(creativity.item()))
+    logs["alpha_log"].append(alpha_effective)
 
     # Add output to memory buffers (live -> replay when overflowing)
     buffers.add(output)
     live_sz, replay_sz, total_sz = buffers.sizes()
-    logs['mem_live_log'].append(live_sz)
-    logs['mem_replay_log'].append(replay_sz)
-    logs['mem_total_log'].append(total_sz)
+    logs["mem_live_log"].append(live_sz)
+    logs["mem_replay_log"].append(replay_sz)
+    logs["mem_total_log"].append(total_sz)
 
 
-def _check_and_trigger_pulse(creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol,
-                             pulse_steps, pulse_markers):
+def _check_and_trigger_pulse(
+    creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol, pulse_steps, pulse_markers
+):
     pulse_counter = 0
     if creativity_pulse and step + 1 >= 2 * pulse_window:
         recent = creativity_log[-pulse_window:]
-        prev = creativity_log[-2 * pulse_window: -pulse_window]
+        prev = creativity_log[-2 * pulse_window : -pulse_window]
         if sum(recent) / pulse_window < (1 - pulse_drop_tol) * (sum(prev) / pulse_window):
             pulse_counter = pulse_steps
             pulse_markers.append(step + 1)
@@ -1216,57 +1196,71 @@ def main():
     logs = _initialize_logs()
 
     # Main simulation loop
-    for step in range(config['n_steps']):
-        curr_alpha = _update_alpha_for_step(alpha_ctrl, step, logs['creativity_log'])
-        alpha_effective, extra_noise, logs['pulse_counter'] = _apply_pulse_modulation(curr_alpha,
-                                                                                      logs[
-                                                                                          'pulse_counter'],
-                                                                                      config[
-                                                                                          'alpha_min'],
-                                                                                      config[
-                                                                                          'pulse_alpha_drop'],
-                                                                                      config[
-                                                                                          'pulse_noise_gain'])
-        x_i, x_j = _select_pair_or_fallback(buffers, alpha_effective, config['alpha_replay_thresh'],
-                                            config['dim'], config['far_pair_prob'])
-        noise = torch.randn(config['dim'])
+    for step in range(config["n_steps"]):
+        curr_alpha = _update_alpha_for_step(alpha_ctrl, step, logs["creativity_log"])
+        alpha_effective, extra_noise, logs["pulse_counter"] = _apply_pulse_modulation(
+            curr_alpha,
+            logs["pulse_counter"],
+            config["alpha_min"],
+            config["pulse_alpha_drop"],
+            config["pulse_noise_gain"],
+        )
+        x_i, x_j = _select_pair_or_fallback(
+            buffers,
+            alpha_effective,
+            config["alpha_replay_thresh"],
+            config["dim"],
+            config["far_pair_prob"],
+        )
+        noise = torch.randn(config["dim"])
         if extra_noise > 0:
-            noise = noise + extra_noise * torch.randn(config['dim'])
-        output = reorganize(x_i, x_j, alpha_effective, noise, noise_scale=config['noise_scale'])
+            noise = noise + extra_noise * torch.randn(config["dim"])
+        output = reorganize(x_i, x_j, alpha_effective, noise, noise_scale=config["noise_scale"])
         _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective, logs)
-        logs['pulse_counter'] = _check_and_trigger_pulse(config['creativity_pulse'], step,
-                                                         config['pulse_window'],
-                                                         logs['creativity_log'],
-                                                         config['pulse_drop_tol'],
-                                                         config['pulse_steps'],
-                                                         logs['pulse_markers'])
+        logs["pulse_counter"] = _check_and_trigger_pulse(
+            config["creativity_pulse"],
+            step,
+            config["pulse_window"],
+            logs["creativity_log"],
+            config["pulse_drop_tol"],
+            config["pulse_steps"],
+            logs["pulse_markers"],
+        )
         if (step + 1) % 20 == 0:
-            _log_progress(step + 1, config['n_steps'], alpha_effective, logs['novelty_log'][-1],
-                          logs['coherence_log'][-1], logs['creativity_log'][-1],
-                          logs['mem_live_log'][-1], logs['mem_replay_log'][-1],
-                          logs['mem_total_log'][-1])
+            _log_progress(
+                step + 1,
+                config["n_steps"],
+                alpha_effective,
+                logs["novelty_log"][-1],
+                logs["coherence_log"][-1],
+                logs["creativity_log"][-1],
+                logs["mem_live_log"][-1],
+                logs["mem_replay_log"][-1],
+                logs["mem_total_log"][-1],
+            )
 
     # Plotting
-    steps = list(range(1, config['n_steps'] + 1))
+    steps = list(range(1, config["n_steps"] + 1))
     _plot_metrics(
         steps,
-        logs['creativity_log'],
-        logs['novelty_log'],
-        logs['diversity_log'],
-        logs['coherence_log'],
-        logs['mem_live_log'],
-        logs['mem_replay_log'],
-        logs['mem_total_log'],
-        logs['alpha_log'],
-        config['alpha_replay_thresh'],
-        logs['pulse_markers'],
+        logs["creativity_log"],
+        logs["novelty_log"],
+        logs["diversity_log"],
+        logs["coherence_log"],
+        logs["mem_live_log"],
+        logs["mem_replay_log"],
+        logs["mem_total_log"],
+        logs["alpha_log"],
+        config["alpha_replay_thresh"],
+        logs["pulse_markers"],
     )
     print(
         f"Final memory sizes: live={logs['mem_live_log'][-1]}, "
         f"replay={logs['mem_replay_log'][-1]}, total={logs['mem_total_log'][-1]}"
     )
     print(
-        f"Average creativity score: {sum(logs['creativity_log']) / len(logs['creativity_log']):.4f}")
+        f"Average creativity score: {sum(logs['creativity_log']) / len(logs['creativity_log']):.4f}"
+    )
     plt.show()
 
 
