@@ -14,6 +14,8 @@ resulting combinations. It includes:
 """
 
 import math
+import argparse
+import os
 from collections import deque
 from typing import Tuple, Optional, Any
 
@@ -1069,6 +1071,24 @@ def _warn_large_simulation(n_initial_memory, n_steps, use_tensor_memory, dim):
 
 
 def _setup_simulation_config():
+    # Parse minimal CLI flags first to allow overrides
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--enable-competence",
+        dest="enable_competence",
+        action="store_true",
+        help="Enable reorganizational competence metric",
+    )
+    parser.add_argument(
+        "--no-enable-competence",
+        dest="enable_competence",
+        action="store_false",
+        help="Disable reorganizational competence metric",
+    )
+    parser.set_defaults(enable_competence=None)
+    # Parse only known to avoid conflicting with external launchers
+    args, _ = parser.parse_known_args()
+
     dim = 16  # Dimension of latent vectors (try 32, 64, 128 for richer dynamics)
     n_initial_memory = 100  # Initial number of memory vectors
     n_steps = 300  # Number of simulation steps
@@ -1117,7 +1137,7 @@ def _setup_simulation_config():
     _validate_dimensions(dim)
     _warn_large_simulation(n_initial_memory, n_steps, use_tensor_memory, dim)
 
-    return {
+    cfg = {
         "dim": dim,
         "n_initial_memory": n_initial_memory,
         "n_steps": n_steps,
@@ -1145,6 +1165,21 @@ def _setup_simulation_config():
         "pulse_noise_gain": pulse_noise_gain,
         "pulse_alpha_drop": pulse_alpha_drop,
     }
+
+    # Feature toggles (default True), allow ENV and CLI override
+    enable_comp_default = True
+    env_override = os.getenv("ENABLE_COMPETENCE")
+    if env_override is not None:
+        try:
+            enable_comp_default = bool(int(env_override))
+        except ValueError:
+            enable_comp_default = env_override.lower() in {"true", "t", "yes", "y", "on"}
+    if args.enable_competence is not None:
+        cfg["enable_competence"] = bool(args.enable_competence)
+    else:
+        cfg["enable_competence"] = enable_comp_default
+
+    return cfg
 
 
 def _initialize_components(config):
@@ -1228,12 +1263,18 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
 
     # Post-update memory for competence and diversity
     memory_after = buffers.full_memory()
-    competence, new_centroid, diversity_norm = compute_competence(
-        logs.get("prev_centroid"),
-        logs.get("prev_diversity_norm"),
-        memory_after,
-        config.get("baseline_diversity", 0.0),
-    )
+    if config.get("enable_competence", True):
+        competence, new_centroid, diversity_norm = compute_competence(
+            logs.get("prev_centroid"),
+            logs.get("prev_diversity_norm"),
+            memory_after,
+            config.get("baseline_diversity", 0.0),
+        )
+        # Update competence state
+        logs["prev_centroid"] = new_centroid
+        logs["prev_diversity_norm"] = diversity_norm
+    else:
+        competence = 1.0
     creativity = novelty * coherence * competence
 
     sample_for_div = _sample_memory_for_normalization(
@@ -1248,10 +1289,6 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
     logs["coherence_log"].append(float(coherence.item()))
     logs["creativity_log"].append(float(creativity.item()))
     logs["alpha_log"].append(alpha_effective)
-
-    # Update competence state
-    logs["prev_centroid"] = new_centroid
-    logs["prev_diversity_norm"] = diversity_norm
 
     # Memory sizes
     live_sz, replay_sz, total_sz = buffers.sizes()
