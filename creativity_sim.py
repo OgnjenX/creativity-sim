@@ -135,7 +135,6 @@ def _knn_distance(
     return kth, local_mean
 
 
-
 def compute_novelty(
     vector: torch.Tensor,
     memory: torch.Tensor,
@@ -469,10 +468,12 @@ class MemoryBuffers:
         if self.use_tensor_memory:
             # Replay comes first in full_memory()
             if global_idx < self._replay_size:
-                self._replay_tensor[(self._replay_idx - self._replay_size + global_idx) % self.replay_capacity] = v
+                self._replay_tensor[
+                    (self._replay_idx - self._replay_size + global_idx) % self.replay_capacity] = v
             else:
                 live_pos = global_idx - self._replay_size
-                self._live_tensor[(self._live_idx - self._live_size + live_pos) % self.live_capacity] = v
+                self._live_tensor[
+                    (self._live_idx - self._live_size + live_pos) % self.live_capacity] = v
         else:
             if global_idx < len(self.replay):
                 self.replay[global_idx] = v
@@ -1141,7 +1142,8 @@ def _initialize_logs():
     return logs
 
 
-def _apply_pulse_modulation(curr_alpha, pulse_counter, alpha_min, pulse_alpha_drop, pulse_noise_gain):
+def _apply_pulse_modulation(curr_alpha, pulse_counter, alpha_min, pulse_alpha_drop,
+                            pulse_noise_gain):
     alpha_effective = curr_alpha
     extra_noise = 0.0
     if pulse_counter > 0:
@@ -1185,11 +1187,12 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
     logs['mem_total_log'].append(total_sz)
 
 
-def _check_and_trigger_pulse(creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol, pulse_steps, pulse_markers):
+def _check_and_trigger_pulse(creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol,
+                             pulse_steps, pulse_markers):
     pulse_counter = 0
     if creativity_pulse and step + 1 >= 2 * pulse_window:
         recent = creativity_log[-pulse_window:]
-        prev = creativity_log[-2 * pulse_window : -pulse_window]
+        prev = creativity_log[-2 * pulse_window: -pulse_window]
         if sum(recent) / pulse_window < (1 - pulse_drop_tol) * (sum(prev) / pulse_window):
             pulse_counter = pulse_steps
             pulse_markers.append(step + 1)
@@ -1215,16 +1218,33 @@ def main():
     # Main simulation loop
     for step in range(config['n_steps']):
         curr_alpha = _update_alpha_for_step(alpha_ctrl, step, logs['creativity_log'])
-        alpha_effective, extra_noise, logs['pulse_counter'] = _apply_pulse_modulation(curr_alpha, logs['pulse_counter'], config['alpha_min'], config['pulse_alpha_drop'], config['pulse_noise_gain'])
-        x_i, x_j = _select_pair_or_fallback(buffers, alpha_effective, config['alpha_replay_thresh'], config['dim'], config['far_pair_prob'])
+        alpha_effective, extra_noise, logs['pulse_counter'] = _apply_pulse_modulation(curr_alpha,
+                                                                                      logs[
+                                                                                          'pulse_counter'],
+                                                                                      config[
+                                                                                          'alpha_min'],
+                                                                                      config[
+                                                                                          'pulse_alpha_drop'],
+                                                                                      config[
+                                                                                          'pulse_noise_gain'])
+        x_i, x_j = _select_pair_or_fallback(buffers, alpha_effective, config['alpha_replay_thresh'],
+                                            config['dim'], config['far_pair_prob'])
         noise = torch.randn(config['dim'])
         if extra_noise > 0:
             noise = noise + extra_noise * torch.randn(config['dim'])
         output = reorganize(x_i, x_j, alpha_effective, noise, noise_scale=config['noise_scale'])
         _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective, logs)
-        logs['pulse_counter'] = _check_and_trigger_pulse(config['creativity_pulse'], step, config['pulse_window'], logs['creativity_log'], config['pulse_drop_tol'], config['pulse_steps'], logs['pulse_markers'])
+        logs['pulse_counter'] = _check_and_trigger_pulse(config['creativity_pulse'], step,
+                                                         config['pulse_window'],
+                                                         logs['creativity_log'],
+                                                         config['pulse_drop_tol'],
+                                                         config['pulse_steps'],
+                                                         logs['pulse_markers'])
         if (step + 1) % 20 == 0:
-            _log_progress(step + 1, config['n_steps'], alpha_effective, logs['novelty_log'][-1], logs['coherence_log'][-1], logs['creativity_log'][-1], logs['mem_live_log'][-1], logs['mem_replay_log'][-1], logs['mem_total_log'][-1])
+            _log_progress(step + 1, config['n_steps'], alpha_effective, logs['novelty_log'][-1],
+                          logs['coherence_log'][-1], logs['creativity_log'][-1],
+                          logs['mem_live_log'][-1], logs['mem_replay_log'][-1],
+                          logs['mem_total_log'][-1])
 
     # Plotting
     steps = list(range(1, config['n_steps'] + 1))
@@ -1245,7 +1265,8 @@ def main():
         f"Final memory sizes: live={logs['mem_live_log'][-1]}, "
         f"replay={logs['mem_replay_log'][-1]}, total={logs['mem_total_log'][-1]}"
     )
-    print(f"Average creativity score: {sum(logs['creativity_log']) / len(logs['creativity_log']):.4f}")
+    print(
+        f"Average creativity score: {sum(logs['creativity_log']) / len(logs['creativity_log']):.4f}")
     plt.show()
 
 
