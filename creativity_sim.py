@@ -10,7 +10,7 @@ resulting combinations. It includes:
 - Dynamic/continuous alpha control (cosine schedule or adaptive controller)
 - Refined coherence metric (cosine similarity clipped to [0,1])
 - Fixed-size memory buffers and tracking of memory growth
-- Enhanced plotting of novelty, coherence, creativity (and optional memory size)
+- Enhanced plotting of novelty, coherence, competence, creativity (and optional memory size)
 """
 
 import math
@@ -211,6 +211,51 @@ def compute_coherence(vector: torch.Tensor, x_i: torch.Tensor, x_j: torch.Tensor
     # Clip to [0, 1]
     coherence = torch.clamp(coherence, 0.0, 1.0)
     return coherence
+
+
+def compute_competence(
+    prev_centroid: Optional[Tensor],
+    prev_diversity_norm: Optional[float],
+    memory_after: Tensor,
+    baseline_diversity: float,
+    *,
+    w_div: float = 0.7,
+    w_shift: float = 0.3,
+    scale: float = 0.5,
+) -> Tuple[float, Tensor, float]:
+    """Compute competence as improvement in representational structure.
+
+    Combines two post-update signals:
+    - Diversity change: increase in average pairwise distance (normalized).
+    - Prototype (centroid) shift: magnitude of centroid change.
+
+    competence = 1 + scale * tanh(w_div*delta_div + w_shift*shift_norm)
+
+    Returns (competence, new_centroid, diversity_norm).
+    """
+    eps = 1e-8
+    if memory_after.numel() == 0:
+        return 1.0, torch.zeros(0), 0.0
+
+    centroid_now = torch.mean(memory_after, dim=0)
+    sample_for_div = _sample_memory_for_normalization(
+        memory_after, max_samples=200, deterministic=False, seed=None
+    )
+    diversity_now = float(_avg_pairwise_distance(sample_for_div).item())
+    diversity_norm = (
+        0.0 if baseline_diversity <= 0 else diversity_now / (baseline_diversity + eps)
+    )
+
+    if prev_centroid is None or prev_diversity_norm is None:
+        return 1.0, centroid_now, diversity_norm
+
+    delta_div = diversity_norm - float(prev_diversity_norm)
+    shift = torch.norm(centroid_now - prev_centroid, dim=0)
+    shift_norm = float(shift / (baseline_diversity + eps))
+    structure_delta = w_div * delta_div + w_shift * shift_norm
+    competence = 1.0 + float(scale * torch.tanh(torch.tensor(structure_delta)))
+
+    return competence, centroid_now, diversity_norm
 
 
 class AlphaController:
@@ -797,6 +842,7 @@ def _log_progress(
     curr_alpha: float,
     novelty: float,
     coherence: float,
+    competence: float,
     creativity: float,
     live_sz: int,
     replay_sz: int,
@@ -807,6 +853,7 @@ def _log_progress(
         f"alpha={curr_alpha:.3f}, "
         f"novelty={novelty:.4f}, "
         f"coherence={coherence:.4f}, "
+        f"competence={competence:.4f}, "
         f"creativity={creativity:.4f}, "
         f"mem_live={live_sz}, mem_replay={replay_sz}, total_mem={total_sz}"
     )
@@ -817,6 +864,7 @@ def _plot_metrics(
     creativity_log,
     novelty_log,
     diversity_log,
+    competence_log,
     coherence_log,
     mem_live_log,
     mem_replay_log,
@@ -861,21 +909,21 @@ def _plot_metrics(
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
-    # Diversity curve
+    # Competence curve (reorganizational)
     axes[0, 2].plot(
         steps,
-        diversity_log,
-        label="Diversity",
-        color="tab:brown",
+        competence_log,
+        label="Competence",
+        color="tab:gray",
         linewidth=2,
         linestyle="-",
-        marker=".",
+        marker="*",
         markersize=3,
         markevery=max(1, len(steps) // 20),
     )
-    axes[0, 2].set_title("Memory Diversity (avg distance)", fontweight="bold")
+    axes[0, 2].set_title("Competence (structure improvement)", fontweight="bold")
     axes[0, 2].set_xlabel("Step")
-    axes[0, 2].set_ylabel("Avg pairwise distance")
+    axes[0, 2].set_ylabel("Competence (≈1 baseline)")
     axes[0, 2].grid(True, alpha=0.3)
     axes[0, 2].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
@@ -970,6 +1018,24 @@ def _plot_metrics(
         loc=LEGEND_LOC_UPPER_RIGHT,
         bbox_to_anchor=(0.98, 0.98),
     )
+
+    # Memory Diversity panel (post-update)
+    axes[1, 2].plot(
+        steps,
+        diversity_log,
+        label="Diversity",
+        color="tab:brown",
+        linewidth=2,
+        linestyle="-",
+        marker=".",
+        markersize=3,
+        markevery=max(1, len(steps) // 20),
+    )
+    axes[1, 2].set_title("Memory Diversity (avg distance)", fontweight="bold")
+    axes[1, 2].set_xlabel("Step")
+    axes[1, 2].set_ylabel("Avg pairwise distance")
+    axes[1, 2].grid(True, alpha=0.3)
+    axes[1, 2].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
     # Mark pulse steps, if any
     if pulse_steps:
@@ -1101,6 +1167,13 @@ def _initialize_components(config):
         period=config["cosine_period"],
     )
 
+    # Baseline diversity for competence normalization
+    init_memory = buffers.full_memory()
+    sample_for_div = _sample_memory_for_normalization(
+        init_memory, max_samples=200, deterministic=False, seed=None
+    )
+    config["baseline_diversity"] = float(_avg_pairwise_distance(sample_for_div).item())
+
     return buffers, alpha_ctrl
 
 
@@ -1108,6 +1181,7 @@ def _initialize_logs():
     logs = {
         "novelty_log": [],
         "diversity_log": [],
+        "competence_log": [],
         "coherence_log": [],
         "creativity_log": [],
         "alpha_log": [],
@@ -1116,6 +1190,9 @@ def _initialize_logs():
         "mem_total_log": [],
         "pulse_markers": [],
         "pulse_counter": 0,
+        # Internal state for competence
+        "prev_centroid": None,
+        "prev_diversity_norm": None,
     }
     return logs
 
@@ -1133,10 +1210,11 @@ def _apply_pulse_modulation(
 
 
 def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective, logs):
-    memory_tensor = buffers.full_memory()
+    # Pre-update memory for novelty/coherence
+    memory_before = buffers.full_memory()
     novelty = compute_novelty(
         output,
-        memory_tensor,
+        memory_before,
         mode=config["novelty_mode"],
         k=config["knn_k"],
         diversity_lambda=config["diversity_lambda"],
@@ -1144,22 +1222,38 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
         seed=config["novelty_sampling_seed"],
     )
     coherence = compute_coherence(output, x_i, x_j)
-    creativity = novelty * coherence
-    # Diversity of memory
+
+    # Update memory with new output
+    buffers.add(output)
+
+    # Post-update memory for competence and diversity
+    memory_after = buffers.full_memory()
+    competence, new_centroid, diversity_norm = compute_competence(
+        logs.get("prev_centroid"),
+        logs.get("prev_diversity_norm"),
+        memory_after,
+        config.get("baseline_diversity", 0.0),
+    )
+    creativity = novelty * coherence * competence
+
     sample_for_div = _sample_memory_for_normalization(
-        memory_tensor, max_samples=200, deterministic=False, seed=None
+        memory_after, max_samples=200, deterministic=False, seed=None
     )
     diversity = float(_avg_pairwise_distance(sample_for_div).item())
 
     # Log metrics
     logs["novelty_log"].append(float(novelty.item()))
+    logs["competence_log"].append(float(competence))
     logs["diversity_log"].append(diversity)
     logs["coherence_log"].append(float(coherence.item()))
     logs["creativity_log"].append(float(creativity.item()))
     logs["alpha_log"].append(alpha_effective)
 
-    # Add output to memory buffers (live -> replay when overflowing)
-    buffers.add(output)
+    # Update competence state
+    logs["prev_centroid"] = new_centroid
+    logs["prev_diversity_norm"] = diversity_norm
+
+    # Memory sizes
     live_sz, replay_sz, total_sz = buffers.sizes()
     logs["mem_live_log"].append(live_sz)
     logs["mem_replay_log"].append(replay_sz)
@@ -1233,6 +1327,7 @@ def main():
                 alpha_effective,
                 logs["novelty_log"][-1],
                 logs["coherence_log"][-1],
+                logs["competence_log"][-1] if logs["competence_log"] else 1.0,
                 logs["creativity_log"][-1],
                 logs["mem_live_log"][-1],
                 logs["mem_replay_log"][-1],
@@ -1246,6 +1341,7 @@ def main():
         logs["creativity_log"],
         logs["novelty_log"],
         logs["diversity_log"],
+        logs["competence_log"],
         logs["coherence_log"],
         logs["mem_live_log"],
         logs["mem_replay_log"],
