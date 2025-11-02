@@ -18,6 +18,7 @@ import os
 import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
+from torch.nn import functional as F
 
 from alpha_controller import AlphaController
 from memory import MemoryBuffers
@@ -67,7 +68,9 @@ def _log_progress(
     live_sz: int,
     replay_sz: int,
     total_sz: int,
+    pair_type: str | None = None,
 ) -> None:
+    ctx_str = f", ctx_pair={pair_type}" if pair_type is not None else ""
     print(
         f"Step {step}/{n_steps}: "
         f"alpha={curr_alpha:.3f}, "
@@ -75,7 +78,7 @@ def _log_progress(
         f"coherence={coherence:.4f}, "
         f"competence={competence:.4f}, "
         f"creativity={creativity:.4f}, "
-        f"mem_live={live_sz}, mem_replay={replay_sz}, total_mem={total_sz}"
+        f"mem_live={live_sz}, mem_replay={replay_sz}, total_mem={total_sz}" + ctx_str
     )
 
 
@@ -92,6 +95,8 @@ def _plot_metrics(
     alpha_log,
     alpha_replay_thresh,
     pulse_steps: list[int] | None = None,
+    context_pair_type_log: list[str] | None = None,
+    context_avg_block: int | None = None,
 ):
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
@@ -111,6 +116,36 @@ def _plot_metrics(
     axes[0, 0].set_ylabel("Creativity")
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].legend(loc=LEGEND_LOC_UPPER_RIGHT)
+
+    # Overlay binned averages of creativity for same vs cross-context pairs
+    if context_pair_type_log is not None and len(context_pair_type_log) == len(steps):
+        block = max(1, int(context_avg_block or 50))
+        same_x, same_y, cross_x, cross_y = [], [], [], []
+        for start in range(0, len(steps), block):
+            end = min(len(steps), start + block)
+            blk_steps = steps[start:end]
+            blk_types = context_pair_type_log[start:end]
+            blk_vals = creativity_log[start:end]
+            same_vals = [v for v, t in zip(blk_vals, blk_types) if t == "same"]
+            cross_vals = [v for v, t in zip(blk_vals, blk_types) if t == "cross"]
+            x_pos = blk_steps[-1]
+            if same_vals:
+                same_x.append(x_pos)
+                same_y.append(sum(same_vals) / len(same_vals))
+            if cross_vals:
+                cross_x.append(x_pos)
+                cross_y.append(sum(cross_vals) / len(cross_vals))
+        if same_x:
+            axes[0, 0].plot(
+                same_x, same_y, color="tab:blue", marker="o", linestyle="none", alpha=0.8,
+                label=f"Same-ctx avg ({block}-step)",
+            )
+        if cross_x:
+            axes[0, 0].plot(
+                cross_x, cross_y, color="tab:red", marker="s", linestyle="none", alpha=0.8,
+                label=f"Cross-ctx avg ({block}-step)",
+            )
+        axes[0, 0].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
     axes[0, 1].plot(
         steps,
@@ -343,10 +378,17 @@ def _setup_simulation_config():
     # Parent sampling strategy
     far_pair_prob = 0.2
 
+    # Context / frame switching configuration
+    n_contexts = 3
+    cross_context_prob = 0.3
+    context_transform_strength = 0.05  # scaling factor for random transformations (reduced)
+    context_projection = "base"  # "base" or "avg" (average of parent frames)
+    context_avg_block = 50  # steps per averaging block for plotting
+
     # Stagnation-triggered exploration pulse
     creativity_pulse = True
     pulse_window = 30
-    pulse_drop_tol = 0.03  # trigger if drop vs. prior window exceeds this
+    pulse_drop_tol = 0.05  # trigger if drop vs. prior window exceeds this
     pulse_steps = 6
     pulse_noise_gain = 1.0  # extra noise magnitude added during pulse
     pulse_alpha_drop = 0.15  # temporarily decrease alpha by this amount
@@ -376,6 +418,12 @@ def _setup_simulation_config():
         "memory_policy": memory_policy,
         "similarity_threshold": similarity_threshold,
         "far_pair_prob": far_pair_prob,
+        # Contexts
+        "n_contexts": n_contexts,
+        "cross_context_prob": cross_context_prob,
+        "context_transform_strength": context_transform_strength,
+        "context_projection": context_projection,
+        "context_avg_block": context_avg_block,
         "creativity_pulse": creativity_pulse,
         "pulse_window": pulse_window,
         "pulse_drop_tol": pulse_drop_tol,
@@ -427,6 +475,25 @@ def _initialize_components(config):
     )
     config["baseline_diversity"] = float(avg_pairwise_distance(sample_for_div).item())
 
+    # Initialize context transformation matrices (near-identity random transforms)
+    dim = config["dim"]
+    n_contexts = config["n_contexts"]
+    strength = config["context_transform_strength"]
+    contexts = [torch.eye(dim) + strength * torch.randn(dim, dim) for _ in range(n_contexts)]
+    # Normalize rows to stabilize scales across contexts
+    for i in range(n_contexts):
+        contexts[i] = F.normalize(contexts[i], dim=1)
+    # Precompute inverses for back-projection (fallback to pinverse if singular)
+    contexts_inv = []
+    for M in contexts:
+        try:
+            invM = torch.linalg.inv(M)
+        except RuntimeError:
+            invM = torch.pinverse(M)
+        contexts_inv.append(invM)
+    config["contexts"] = contexts
+    config["contexts_inv"] = contexts_inv
+
     return buffers, alpha_ctrl
 
 
@@ -437,6 +504,10 @@ def _initialize_logs():
         "competence_log": [],
         "coherence_log": [],
         "creativity_log": [],
+        # Context pairing logs
+        "context_pair_type_log": [],  # "same" | "cross"
+        "creativity_same": [],
+        "creativity_cross": [],
         "alpha_log": [],
         "mem_live_log": [],
         "mem_replay_log": [],
@@ -474,9 +545,13 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
         deterministic_sampling=config["deterministic_novelty_sampling"],
         seed=config["novelty_sampling_seed"],
     )
+    # Optionally clip novelty to avoid explosion
+    novelty = torch.clamp(novelty, 0.0, 5.0)
     coherence = compute_coherence(output, x_i, x_j)
 
     # Update memory with new output
+    # Normalize output vector before storing in memory
+    output = output / (output.norm() + 1e-8)
     buffers.add(output)
 
     # Post-update memory for competence and diversity
@@ -513,6 +588,13 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
     logs["mem_live_log"].append(live_sz)
     logs["mem_replay_log"].append(replay_sz)
     logs["mem_total_log"].append(total_sz)
+    # Split creativity by last recorded context pair type (if present)
+    if logs.get("context_pair_type_log"):
+        last_type = logs["context_pair_type_log"][-1]
+        if last_type == "same":
+            logs["creativity_same"].append(float(creativity.item()))
+        elif last_type == "cross":
+            logs["creativity_cross"].append(float(creativity.item()))
 
 
 def _check_and_trigger_pulse(
@@ -561,10 +643,40 @@ def main():
             config["dim"],
             config["far_pair_prob"],
         )
+        # Sample contexts for parents with cross-context control
+        n_ctx = config["n_contexts"]
+        cross_prob = float(config["cross_context_prob"])
+        if float(torch.rand(()).item()) < cross_prob:
+            ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
+            # ensure different
+            offset = int(torch.randint(1, n_ctx, (1,)).item())
+            ctx_j = (ctx_i + offset) % n_ctx
+            pair_type = "cross"
+        else:
+            ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
+            ctx_j = ctx_i
+            pair_type = "same"
+
+        contexts = config["contexts"]
+        contexts_inv = config["contexts_inv"]
+        # Apply context transformations before recombination
+        x_i_ctx = contexts[ctx_i] @ x_i
+        x_j_ctx = contexts[ctx_j] @ x_j
         noise = torch.randn(config["dim"])
         if extra_noise > 0:
             noise = noise + extra_noise * torch.randn(config["dim"])
-        output = reorganize(x_i, x_j, alpha_effective, noise, noise_scale=config["noise_scale"])
+        output_ctx = reorganize(
+            x_i_ctx, x_j_ctx, alpha_effective, noise, noise_scale=config["noise_scale"]
+        )
+        # Project result back according to configured strategy
+        if config.get("context_projection", "base") == "avg":
+            M_avg = 0.5 * (contexts_inv[ctx_i] + contexts_inv[ctx_j])
+            output = M_avg @ output_ctx
+        else:
+            # Default: project to base context (0)
+            output = contexts_inv[0] @ output_ctx
+        # Log context pair type for this output
+        logs["context_pair_type_log"].append(pair_type)
         _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective, logs)
         logs["pulse_counter"] = _check_and_trigger_pulse(
             config["creativity_pulse"],
@@ -587,6 +699,7 @@ def main():
                 logs["mem_live_log"][-1],
                 logs["mem_replay_log"][-1],
                 logs["mem_total_log"][-1],
+                pair_type,
             )
 
     # Plotting
@@ -604,14 +717,21 @@ def main():
         logs["alpha_log"],
         config["alpha_replay_thresh"],
         logs["pulse_markers"],
+        logs["context_pair_type_log"],
+        config.get("context_avg_block", 50),
     )
     print(
         f"Final memory sizes: live={logs['mem_live_log'][-1]}, "
         f"replay={logs['mem_replay_log'][-1]}, total={logs['mem_total_log'][-1]}"
     )
-    print(
-        f"Average creativity score: {sum(logs['creativity_log']) / len(logs['creativity_log']):.4f}"
-    )
+    avg_creativity = sum(logs["creativity_log"]) / len(logs["creativity_log"]) if logs["creativity_log"] else 0.0
+    print(f"Average creativity score: {avg_creativity:.4f}")
+    if logs["creativity_same"]:
+        print(f"Same-context avg creativity: {sum(logs['creativity_same']) / len(logs['creativity_same']):.4f}")
+    if logs["creativity_cross"]:
+        print(
+            f"Cross-context avg creativity: {sum(logs['creativity_cross']) / len(logs['creativity_cross']):.4f}"
+        )
     plt.show()
 
 

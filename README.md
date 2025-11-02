@@ -66,3 +66,25 @@ Competence is centered near 1.0 and bounded: competence ≈ 1 + 0.5 · tanh(Δst
 and is included multiplicatively: creativity = novelty × coherence × competence.
 The plot now shows novelty, coherence, competence, and creativity over time, plus
 memory growth/alpha and memory diversity.
+
+## Context / Frame Switching
+
+Inspired by Thousand Brains Theory, the simulation supports multiple representational
+contexts (frames) that apply distinct, near-identity linear transforms to the latent
+space. During recombination, each parent can be sampled under a different context to
+enable cross-context recombination.
+
+- Config (defaults in code):
+  - `n_contexts = 3`
+  - `cross_context_prob = 0.3` (probability to force parents from different contexts)
+  - `context_transform_strength = 0.1` (scale of random context transforms)
+- On each step, parents `(x_i, x_j)` are transformed: `x_i_ctx = C[ctx_i] @ x_i`,
+  `x_j_ctx = C[ctx_j] @ x_j`, then combined via `reorganize(...)`.
+- The result is projected back to a base context (context 0) before storing in memory.
+- Logging marks each output as `same-ctx` or `cross-ctx`.
+- The plot overlays:
+  - Per-step creativity markers colored by context pair type
+  - Horizontal lines with average creativity for same vs. cross-context outputs
+
+This allows analyzing whether cross-context recombination increases creativity in your
+setup. Adjust the context config to explore different regimes.
