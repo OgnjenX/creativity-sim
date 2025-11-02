@@ -32,6 +32,8 @@ from metrics import (
 )
 
 LEGEND_LOC_UPPER_RIGHT = "upper right"
+COLOR_TAB_BLUE = "tab:blue"
+COLOR_TAB_RED = "tab:red"
 
 
 def _update_alpha_for_step(
@@ -55,6 +57,42 @@ def _select_pair_or_fallback(
     if pair is None:
         return torch.randn(dim), torch.randn(dim)
     return pair  # type: ignore[return-value]
+
+
+def _plot_context_pair_averages(
+    axes, steps, creativity_log, context_pair_type_log, context_avg_block
+):
+    """Plot binned averages of creativity for same vs cross-context pairs."""
+    if context_pair_type_log is None or len(context_pair_type_log) != len(steps):
+        return
+
+    block = max(1, int(context_avg_block or 50))
+    same_x, same_y, cross_x, cross_y = [], [], [], []
+    for start in range(0, len(steps), block):
+        end = min(len(steps), start + block)
+        blk_steps = steps[start:end]
+        blk_types = context_pair_type_log[start:end]
+        blk_vals = creativity_log[start:end]
+        same_vals = [v for v, t in zip(blk_vals, blk_types) if t == "same"]
+        cross_vals = [v for v, t in zip(blk_vals, blk_types) if t == "cross"]
+        x_pos = blk_steps[-1]
+        if same_vals:
+            same_x.append(x_pos)
+            same_y.append(sum(same_vals) / len(same_vals))
+        if cross_vals:
+            cross_x.append(x_pos)
+            cross_y.append(sum(cross_vals) / len(cross_vals))
+    if same_x:
+        axes[0, 0].plot(
+            same_x, same_y, color=COLOR_TAB_BLUE, marker="o", linestyle="none",
+            alpha=0.8, label=f"Same-ctx avg ({block}-step)",
+        )
+    if cross_x:
+        axes[0, 0].plot(
+            cross_x, cross_y, color=COLOR_TAB_RED, marker="s", linestyle="none",
+            alpha=0.8, label=f"Cross-ctx avg ({block}-step)",
+        )
+    axes[0, 0].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
 
 def _log_progress(
@@ -89,14 +127,10 @@ def _plot_metrics(
     diversity_log,
     competence_log,
     coherence_log,
-    mem_live_log,
-    mem_replay_log,
-    mem_total_log,
     alpha_log,
     alpha_replay_thresh,
-    pulse_steps: list[int] | None = None,
-    context_pair_type_log: list[str] | None = None,
-    context_avg_block: int | None = None,
+    memory_logs: dict,
+    plot_opts: dict | None = None,
 ):
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
@@ -118,34 +152,13 @@ def _plot_metrics(
     axes[0, 0].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
     # Overlay binned averages of creativity for same vs cross-context pairs
-    if context_pair_type_log is not None and len(context_pair_type_log) == len(steps):
-        block = max(1, int(context_avg_block or 50))
-        same_x, same_y, cross_x, cross_y = [], [], [], []
-        for start in range(0, len(steps), block):
-            end = min(len(steps), start + block)
-            blk_steps = steps[start:end]
-            blk_types = context_pair_type_log[start:end]
-            blk_vals = creativity_log[start:end]
-            same_vals = [v for v, t in zip(blk_vals, blk_types) if t == "same"]
-            cross_vals = [v for v, t in zip(blk_vals, blk_types) if t == "cross"]
-            x_pos = blk_steps[-1]
-            if same_vals:
-                same_x.append(x_pos)
-                same_y.append(sum(same_vals) / len(same_vals))
-            if cross_vals:
-                cross_x.append(x_pos)
-                cross_y.append(sum(cross_vals) / len(cross_vals))
-        if same_x:
-            axes[0, 0].plot(
-                same_x, same_y, color="tab:blue", marker="o", linestyle="none", alpha=0.8,
-                label=f"Same-ctx avg ({block}-step)",
-            )
-        if cross_x:
-            axes[0, 0].plot(
-                cross_x, cross_y, color="tab:red", marker="s", linestyle="none", alpha=0.8,
-                label=f"Cross-ctx avg ({block}-step)",
-            )
-        axes[0, 0].legend(loc=LEGEND_LOC_UPPER_RIGHT)
+    if plot_opts is None:
+        plot_opts = {}
+    context_pair_type_log = plot_opts.get("context_pair_type_log")
+    context_avg_block = plot_opts.get("context_avg_block", 50)
+    _plot_context_pair_averages(
+        axes, steps, creativity_log, context_pair_type_log, context_avg_block
+    )
 
     axes[0, 1].plot(
         steps,
@@ -202,7 +215,7 @@ def _plot_metrics(
     ax = axes[1, 1]
     ax.plot(
         steps,
-        mem_total_log,
+        memory_logs["mem_total_log"],
         label="Total Memory",
         color="tab:blue",
         linewidth=2,
@@ -213,7 +226,7 @@ def _plot_metrics(
     )
     ax.plot(
         steps,
-        mem_live_log,
+        memory_logs["mem_live_log"],
         label="Live Memory",
         color="tab:cyan",
         linewidth=1.5,
@@ -225,9 +238,9 @@ def _plot_metrics(
     )
     ax.plot(
         steps,
-        mem_replay_log,
+        memory_logs["mem_replay_log"],
         label="Replay Memory",
-        color="tab:red",
+        color=COLOR_TAB_RED,
         linewidth=1.5,
         linestyle="-.",
         marker="s",
@@ -293,11 +306,12 @@ def _plot_metrics(
     axes[1, 2].legend(loc=LEGEND_LOC_UPPER_RIGHT)
 
     # Mark pulse steps, if any
+    pulse_steps = plot_opts.get("pulse_steps")
     if pulse_steps:
         for s in pulse_steps:
             for row in range(2):
                 for col in range(3):
-                    axes[row, col].axvline(x=s, color="tab:red", alpha=0.2, linestyle=":")
+                    axes[row, col].axvline(x=s, color=COLOR_TAB_RED, alpha=0.2, linestyle=":")
     fig.suptitle("Creativity Simulation Metrics", fontsize=16, fontweight="bold")
     fig.tight_layout(rect=(0, 0.02, 1, 0.96))
     plt.savefig("creativity_plot.png", dpi=300, bbox_inches="tight")
@@ -485,12 +499,12 @@ def _initialize_components(config):
         contexts[i] = F.normalize(contexts[i], dim=1)
     # Precompute inverses for back-projection (fallback to pinverse if singular)
     contexts_inv = []
-    for M in contexts:
+    for matrix in contexts:
         try:
-            invM = torch.linalg.inv(M)
+            inv_matrix = torch.linalg.inv(matrix)  # pylint: disable=not-callable
         except RuntimeError:
-            invM = torch.pinverse(M)
-        contexts_inv.append(invM)
+            inv_matrix = torch.pinverse(matrix)
+        contexts_inv.append(inv_matrix)
     config["contexts"] = contexts
     config["contexts_inv"] = contexts_inv
 
@@ -598,7 +612,8 @@ def _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective,
 
 
 def _check_and_trigger_pulse(
-    creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol, pulse_steps, pulse_markers
+    creativity_pulse, step, pulse_window, creativity_log, pulse_drop_tol, pulse_steps,
+    pulse_markers
 ):
     pulse_counter = 0
     if creativity_pulse and step + 1 >= 2 * pulse_window:
@@ -608,6 +623,37 @@ def _check_and_trigger_pulse(
             pulse_counter = pulse_steps
             pulse_markers.append(step + 1)
     return pulse_counter
+
+
+def _sample_and_apply_contexts(config, x_i, x_j):
+    """Sample contexts and apply transformations to input vectors."""
+    n_ctx = config["n_contexts"]
+    cross_prob = float(config["cross_context_prob"])
+
+    if float(torch.rand(()).item()) < cross_prob:
+        ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
+        offset = int(torch.randint(1, n_ctx, (1,)).item())
+        ctx_j = (ctx_i + offset) % n_ctx
+        pair_type = "cross"
+    else:
+        ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
+        ctx_j = ctx_i
+        pair_type = "same"
+
+    contexts = config["contexts"]
+    x_i_ctx = contexts[ctx_i] @ x_i
+    x_j_ctx = contexts[ctx_j] @ x_j
+
+    return ctx_i, ctx_j, pair_type, x_i_ctx, x_j_ctx
+
+
+def _project_output_back(config, output_ctx, ctx_i, ctx_j, contexts_inv):
+    """Project reorganized output back to base context."""
+    if config.get("context_projection", "base") == "avg":
+        matrix_avg = 0.5 * (contexts_inv[ctx_i] + contexts_inv[ctx_j])
+        return matrix_avg @ output_ctx
+    else:
+        return contexts_inv[0] @ output_ctx
 
 
 def main():
@@ -643,25 +689,10 @@ def main():
             config["dim"],
             config["far_pair_prob"],
         )
-        # Sample contexts for parents with cross-context control
-        n_ctx = config["n_contexts"]
-        cross_prob = float(config["cross_context_prob"])
-        if float(torch.rand(()).item()) < cross_prob:
-            ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
-            # ensure different
-            offset = int(torch.randint(1, n_ctx, (1,)).item())
-            ctx_j = (ctx_i + offset) % n_ctx
-            pair_type = "cross"
-        else:
-            ctx_i = int(torch.randint(0, n_ctx, (1,)).item())
-            ctx_j = ctx_i
-            pair_type = "same"
-
-        contexts = config["contexts"]
+        # Sample contexts and apply transformations
+        ctx_i, ctx_j, pair_type, x_i_ctx, x_j_ctx = _sample_and_apply_contexts(config, x_i, x_j)
         contexts_inv = config["contexts_inv"]
-        # Apply context transformations before recombination
-        x_i_ctx = contexts[ctx_i] @ x_i
-        x_j_ctx = contexts[ctx_j] @ x_j
+
         noise = torch.randn(config["dim"])
         if extra_noise > 0:
             noise = noise + extra_noise * torch.randn(config["dim"])
@@ -669,12 +700,7 @@ def main():
             x_i_ctx, x_j_ctx, alpha_effective, noise, noise_scale=config["noise_scale"]
         )
         # Project result back according to configured strategy
-        if config.get("context_projection", "base") == "avg":
-            M_avg = 0.5 * (contexts_inv[ctx_i] + contexts_inv[ctx_j])
-            output = M_avg @ output_ctx
-        else:
-            # Default: project to base context (0)
-            output = contexts_inv[0] @ output_ctx
+        output = _project_output_back(config, output_ctx, ctx_i, ctx_j, contexts_inv)
         # Log context pair type for this output
         logs["context_pair_type_log"].append(pair_type)
         _compute_and_log_metrics(output, buffers, config, x_i, x_j, alpha_effective, logs)
@@ -704,6 +730,16 @@ def main():
 
     # Plotting
     steps = list(range(1, config["n_steps"] + 1))
+    memory_logs = {
+        "mem_live_log": logs["mem_live_log"],
+        "mem_replay_log": logs["mem_replay_log"],
+        "mem_total_log": logs["mem_total_log"],
+    }
+    plot_opts = {
+        "pulse_steps": logs["pulse_markers"],
+        "context_pair_type_log": logs["context_pair_type_log"],
+        "context_avg_block": config.get("context_avg_block", 50),
+    }
     _plot_metrics(
         steps,
         logs["creativity_log"],
@@ -711,27 +747,26 @@ def main():
         logs["diversity_log"],
         logs["competence_log"],
         logs["coherence_log"],
-        logs["mem_live_log"],
-        logs["mem_replay_log"],
-        logs["mem_total_log"],
         logs["alpha_log"],
         config["alpha_replay_thresh"],
-        logs["pulse_markers"],
-        logs["context_pair_type_log"],
-        config.get("context_avg_block", 50),
+        memory_logs,
+        plot_opts,
     )
     print(
         f"Final memory sizes: live={logs['mem_live_log'][-1]}, "
         f"replay={logs['mem_replay_log'][-1]}, total={logs['mem_total_log'][-1]}"
     )
-    avg_creativity = sum(logs["creativity_log"]) / len(logs["creativity_log"]) if logs["creativity_log"] else 0.0
+    if logs["creativity_log"]:
+        avg_creativity = sum(logs["creativity_log"]) / len(logs["creativity_log"])
+    else:
+        avg_creativity = 0.0
     print(f"Average creativity score: {avg_creativity:.4f}")
     if logs["creativity_same"]:
-        print(f"Same-context avg creativity: {sum(logs['creativity_same']) / len(logs['creativity_same']):.4f}")
+        same_avg = sum(logs["creativity_same"]) / len(logs["creativity_same"])
+        print(f"Same-context avg creativity: {same_avg:.4f}")
     if logs["creativity_cross"]:
-        print(
-            f"Cross-context avg creativity: {sum(logs['creativity_cross']) / len(logs['creativity_cross']):.4f}"
-        )
+        cross_avg = sum(logs["creativity_cross"]) / len(logs["creativity_cross"])
+        print(f"Cross-context avg creativity: {cross_avg:.4f}")
     plt.show()
 
 
